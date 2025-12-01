@@ -2,15 +2,14 @@
 
 client_id = "912a83c9af84369d4d44b6f0bd6c8905"
 name = "pros-app"
-application_url = "https://example.com"
+application_url = "https://cdn.enjob.ca"
 embedded = true
 
 [build]
 automatically_update_urls_on_dev = true
-include_config_on_deploy = true
 
 [webhooks]
-api_version = "2026-01"
+api_version = "2024-10"
 
   [[webhooks.subscriptions]]
   topics = [ "app/uninstalled" ]
@@ -21,8 +20,19 @@ api_version = "2026-01"
   uri = "/webhooks/app/scopes_update"
 
 [access_scopes]
-# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "write_products"
+# This was missing read_customers!
+scopes = "write_products,read_customers"
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+# We must list all valid OAuth callback URLs here
+redirect_urls = [
+  "https://cdn.enjob.ca/auth/callback",
+  "https://cdn.enjob.ca/auth/shopify/callback",
+  "https://cdn.enjob.ca/api/auth/callback"
+]
+
+# This connects your Storefront to your App
+[app_proxy]
+url = "https://cdn.enjob.ca/app/proxy"
+subpath = "vip-status"
+prefix = "apps"
