@@ -1,0 +1,26 @@
+{% if customer %}
+  <script>
+    document.addEventListener("DOMContentLoaded", function() {
+      const customerId = "{{ customer.id }}";
+      
+      const proxyUrl = "/apps/vip-status/check?customerId=" + customerId;
+
+      console.log("🔍 Checking VIP status for:", customerId);
+
+      fetch(proxyUrl)
+        .then(res => res.json())
+        .then(data => {
+          console.log("VIP Check Result:", data);
+        })
+        .catch(err => console.error("❌ VIP Check Error:", err));
+    });
+  </script>
+{% endif %}
+
+{% schema %}
+{
+  "name": "VIP Tracker Script",
+  "target": "body",
+  "settings": []
+}
+{% endschema %}
