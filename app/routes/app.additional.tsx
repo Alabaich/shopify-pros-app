@@ -27,7 +27,7 @@ export const loader = async ({ request }: any) => {
   }
 };
 
-export default function AdditionalPage() {
+export default function Index() {
   const data = useLoaderData() as any;
   const { vipCount, lastLogin } = data || {};
 
@@ -89,6 +89,7 @@ export default function AdditionalPage() {
   };
 
   return (
+    <s-page>
     <div style={styles.container}>
       <div style={styles.card}>
         <div style={styles.header}>
@@ -118,5 +119,6 @@ export default function AdditionalPage() {
         <div style={styles.badge}>● System Operational</div>
       </div>
     </div>
+    </s-page>
   );
 }
