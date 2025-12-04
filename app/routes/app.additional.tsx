@@ -1,124 +1,222 @@
 import { useLoaderData } from "react-router";
+import {
+  AppProvider,
+  Page,
+  Layout,
+  LegacyCard,
+  IndexTable,
+  Text,
+  Badge,
+} from "@shopify/polaris";
+import enTranslations from "@shopify/polaris/locales/en.json";
 import { authenticate } from "../shopify.server";
 import db from "../db.server";
+import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
+
+export const links = () => [
+  { rel: "stylesheet", href: polarisStyles },
+];
 
 export const loader = async ({ request }: any) => {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const { shop } = session;
 
   try {
-    const uniqueVips = await db.vipLoginLog.findMany({
+    const logs = await db.vipLoginLog.findMany({
       where: { shop },
-      distinct: ["customerId"],
-      select: { customerId: true },
-    });
-
-    const lastLog = await db.vipLoginLog.findFirst({
-      where: { shop },
+      take: 50,
       orderBy: { timestamp: "desc" },
     });
 
-    return {
-      vipCount: uniqueVips.length,
-      lastLogin: lastLog ? lastLog.timestamp : null,
-    };
+    // Robust ID extraction: "gid://shopify/Customer/12345" -> "12345"
+    const uniqueNumericIds = [...new Set(logs.map((l) => {
+      const idStr = String(l.customerId);
+      const match = idStr.match(/\d+/);
+      return match ? match[0] : null;
+    }))].filter(Boolean);
+    
+    // Create GIDs for the query
+    const queryIds = uniqueNumericIds.map(id => `gid://shopify/Customer/${id}`);
+    
+    console.log("[DEBUG] Querying IDs:", queryIds);
+
+    let shopifyCustomersMap: Record<string, any> = {};
+
+    if (queryIds.length > 0) {
+      try {
+        // FIXED QUERY: using 'numberOfOrders' instead of 'ordersCount'
+        // 'ordersCount' was removed in API 2025-10
+        const response = await admin.graphql(
+          `#graphql
+          query getCustomers($ids: [ID!]!) {
+            nodes(ids: $ids) {
+              ... on Customer {
+                id
+                displayName
+                numberOfOrders
+                orders(first: 1) {
+                  totalCount
+                }
+              }
+            }
+          }`,
+          {
+            variables: {
+              ids: queryIds,
+            },
+          }
+        );
+
+        const responseJson = await response.json();
+        console.log("[DEBUG] Raw Shopify Response:", JSON.stringify(responseJson));
+
+        if (responseJson.data?.nodes) {
+          responseJson.data.nodes.forEach((node: any) => {
+            if (node && node.id) {
+              const numericId = node.id.split("/").pop();
+              shopifyCustomersMap[numericId] = node;
+            }
+          });
+        }
+      } catch (apiError) {
+        console.error("Shopify API Error:", apiError);
+      }
+    }
+
+    const groupedData: Record<string, any> = {};
+
+    logs.forEach((log) => {
+      const { customerId, timestamp, customerTag, id, ordersCount } = log;
+      
+      const dbNumericId = String(customerId).match(/\d+/)?.[0];
+      const freshData = dbNumericId ? shopifyCustomersMap[dbNumericId] : null;
+      
+      let displayOrdersCount = 0;
+      let displayName = customerId;
+
+      if (freshData) {
+        displayName = freshData.displayName;
+        
+        // Priority 1: numberOfOrders (Direct field replacement)
+        // Priority 2: orders.totalCount (Connection count)
+        const directCount = Number(freshData.numberOfOrders) || 0;
+        const connectionCount = freshData.orders?.totalCount || 0;
+        
+        displayOrdersCount = Math.max(directCount, connectionCount);
+      } else {
+        displayOrdersCount = ordersCount ?? 0;
+      }
+
+      if (!groupedData[customerId]) {
+        groupedData[customerId] = {
+          id: id.toString(),
+          name: displayName,
+          latestDate: timestamp,
+          customerTag: customerTag || "",
+          loginCount: 0,
+          ordersCount: displayOrdersCount,
+        };
+      }
+      
+      groupedData[customerId].loginCount += 1;
+    });
+
+    const tableData = Object.values(groupedData);
+
+    return { tableData };
+
   } catch (error) {
-    return { vipCount: 0, lastLogin: null };
+    console.error(error);
+    return { tableData: [] };
   }
 };
 
-export default function Index() {
-  const data = useLoaderData() as any;
-  const { vipCount, lastLogin } = data || {};
+export default function AnalyticsPage() {
+  const { tableData } = useLoaderData() as any;
 
-  const styles = {
-    container: {
-      maxWidth: "800px",
-      margin: "40px auto",
-      fontFamily: '-apple-system, BlinkMacSystemFont, "San Francisco", "Segoe UI", Roboto, "Helvetica Neue", sans-serif',
-      color: "#202223",
-    },
-    card: {
-      backgroundColor: "#ffffff",
-      borderRadius: "8px",
-      boxShadow: "0 4px 6px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0,0,0,0.1)",
-      padding: "24px",
-      border: "1px solid #e1e3e5",
-    },
-    header: {
-      marginBottom: "20px",
-      borderBottom: "1px solid #e1e3e5",
-      paddingBottom: "16px",
-    },
-    title: {
-      fontSize: "20px",
-      fontWeight: "600",
-      margin: 0,
-    },
-    statRow: {
-      display: "flex",
-      justifyContent: "space-between",
-      alignItems: "center",
-      padding: "12px 0",
-    },
-    statLabel: {
-      fontSize: "14px",
-      color: "#6D7175",
-      fontWeight: "500",
-    },
-    statValue: {
-      fontSize: "24px",
-      fontWeight: "600",
-      color: "#008060",
-    },
-    dateValue: {
-      fontSize: "16px",
-      fontWeight: "500",
-      color: "#202223",
-    },
-    badge: {
-      display: "inline-block",
-      padding: "4px 8px",
-      borderRadius: "4px",
-      backgroundColor: "#E4F5EB",
-      color: "#008060",
-      fontSize: "12px",
-      fontWeight: "600",
-      marginTop: "20px",
-    },
+  const resourceName = {
+    singular: 'customer',
+    plural: 'customers',
   };
 
+  const rowMarkup = tableData.map(
+    ({ id, name, latestDate, loginCount, customerTag, ordersCount }: any, index: number) => (
+      <IndexTable.Row
+        id={id}
+        key={id}
+        position={index}
+      >
+        <IndexTable.Cell>
+          <Text variant="bodyMd" fontWeight="bold" as="span">
+            {name}
+          </Text>
+        </IndexTable.Cell>
+        
+        <IndexTable.Cell>
+          <div style={{ whiteSpace: 'nowrap' }}>
+            <Text variant="bodyMd" as="span">
+              {new Date(latestDate).toLocaleString("en-US", {
+                month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"
+              })}
+            </Text>
+          </div>
+        </IndexTable.Cell>
+
+        <IndexTable.Cell>
+          <Text variant="bodyMd" as="span">
+            {loginCount}
+          </Text>
+        </IndexTable.Cell>
+
+        <IndexTable.Cell>
+          <Text variant="bodyMd" as="span">
+            {ordersCount}
+          </Text>
+        </IndexTable.Cell>
+        
+        <IndexTable.Cell>
+          <Badge tone="success">Active</Badge>
+        </IndexTable.Cell>
+        
+        <IndexTable.Cell>
+          {customerTag ? <Badge>{customerTag}</Badge> : '-'}
+        </IndexTable.Cell>
+      </IndexTable.Row>
+    ),
+  );
+
   return (
-    <s-page>
-    <div style={styles.container}>
-      <div style={styles.card}>
-        <div style={styles.header}>
-          <h2 style={styles.title}>VIP Analytics</h2>
-        </div>
-
-        <div style={styles.statRow}>
-          <span style={styles.statLabel}>Active VIP Users</span>
-          <span style={styles.statValue}>{vipCount || 0}</span>
-        </div>
-
-        <div style={{ ...styles.statRow, borderTop: "1px solid #f1f2f3" }}>
-          <span style={styles.statLabel}>Last VIP Login</span>
-          <span style={styles.dateValue}>
-            {lastLogin
-              ? new Date(lastLogin).toLocaleString("en-US", {
-                  day: "numeric",
-                  month: "long",
-                  year: "numeric",
-                  hour: "2-digit",
-                  minute: "2-digit",
-                })
-              : "No logins yet"}
-          </span>
-        </div>
-
-        <div style={styles.badge}>● System Operational</div>
-      </div>
-    </div>
-    </s-page>
+    <AppProvider i18n={enTranslations}>
+      <Page title="Customer Login History">
+        <Layout>
+          <Layout.Section>
+            <LegacyCard>
+              {tableData.length === 0 ? (
+                  <div style={{padding: '30px', textAlign: 'center'}}>
+                      <Text as="p" tone="subdued">No data yet. Log in to your store front to see records here.</Text>
+                  </div>
+              ) : (
+                  <IndexTable
+                    resourceName={resourceName}
+                    itemCount={tableData.length}
+                    selectable={false}
+                    condensed={false}
+                    headings={[
+                        { title: 'Customer' },
+                        { title: 'Last Login' },
+                        { title: 'Total Sessions' },
+                        { title: 'Orders' },
+                        { title: 'Status' },
+                        { title: 'Tag' },
+                    ]}
+                  >
+                    {rowMarkup}
+                  </IndexTable>
+              )}
+            </LegacyCard>
+          </Layout.Section>
+        </Layout>
+      </Page>
+    </AppProvider>
   );
 }

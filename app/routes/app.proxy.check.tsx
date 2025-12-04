@@ -3,7 +3,7 @@ import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin, session } = await authenticate.public.appProxy(request);
+  const { admin } = await authenticate.public.appProxy(request);
 
   if (!admin) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
@@ -11,6 +11,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const url = new URL(request.url);
   const customerId = url.searchParams.get("customerId");
+  const shop = url.searchParams.get("shop");
 
   if (!customerId) {
     return Response.json({ isVip: false, message: "No customer ID provided" });
@@ -21,6 +22,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     : `gid://shopify/Customer/${customerId}`;
 
   try {
+    // FIXED QUERY: using 'numberOfOrders' instead of 'ordersCount'
     const response = await admin.graphql(
       `#graphql
       query getCustomerTags($id: ID!) {
@@ -29,6 +31,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           displayName
           email
           tags
+          numberOfOrders
         }
       }`,
       { variables: { id: customerGid } }
@@ -44,23 +47,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const tags: string[] = customer.tags || [];
     const isVip = tags.includes("VIP");
 
-    // --- LOGGING LOGIC ---
-    // If they are VIP, log this event to the database
-    if (isVip && session?.shop) {
-        // We use a try/catch here to ensure logging failure doesn't break the user experience
+    // Use numberOfOrders directly
+    const ordersCount = Number(customer.numberOfOrders) || 0;
+
+    if (shop) {
         try {
           await db.vipLoginLog.create({
               data: {
-                  shop: session.shop,
-                  customerId: customer.displayName || customerId,
+                  shop: shop,
+                  customerId: customer.id, // Saving ID, not Name
+                  customerTag: tags.join(", "),
+                  ordersCount: ordersCount
               }
           });
         } catch (logError: unknown) {
-          // Fix: Type the error as unknown or explicitly cast it
-          console.error("Failed to log VIP access", logError);
+          console.error("Failed to log access", logError);
         }
     }
-    // ---------------------
 
     return Response.json({
       isVip,
@@ -69,7 +72,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     });
 
   } catch (error) {
-    console.error("VIP Check Failed:", error);
+    console.error("Tag Check Failed:", error);
     return Response.json({ isVip: false, error: "Server Error" }, { status: 500 });
   }
 };

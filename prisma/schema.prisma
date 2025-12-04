@@ -35,5 +35,7 @@ model VipLoginLog {
   id          Int      @id @default(autoincrement())
   shop        String
   customerId  String
+  customerTag String?
+  ordersCount Int?
   timestamp   DateTime @default(now())
 }
