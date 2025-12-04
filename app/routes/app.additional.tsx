@@ -2,7 +2,6 @@ import { useLoaderData } from "react-router";
 import {
   AppProvider,
   Page,
-  Layout,
   LegacyCard,
   IndexTable,
   Text,
@@ -18,110 +17,36 @@ export const links = () => [
 ];
 
 export const loader = async ({ request }: any) => {
-  const { session, admin } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const { shop } = session;
 
   try {
     const logs = await db.vipLoginLog.findMany({
       where: { shop },
-      take: 50,
+      take: 250,
       orderBy: { timestamp: "desc" },
     });
 
-    // Robust ID extraction: "gid://shopify/Customer/12345" -> "12345"
-    const uniqueNumericIds = [...new Set(logs.map((l) => {
-      const idStr = String(l.customerId);
-      const match = idStr.match(/\d+/);
-      return match ? match[0] : null;
-    }))].filter(Boolean);
-    
-    // Create GIDs for the query
-    const queryIds = uniqueNumericIds.map(id => `gid://shopify/Customer/${id}`);
-    
-    console.log("[DEBUG] Querying IDs:", queryIds);
-
-    let shopifyCustomersMap: Record<string, any> = {};
-
-    if (queryIds.length > 0) {
-      try {
-        // FIXED QUERY: using 'numberOfOrders' instead of 'ordersCount'
-        // 'ordersCount' was removed in API 2025-10
-        const response = await admin.graphql(
-          `#graphql
-          query getCustomers($ids: [ID!]!) {
-            nodes(ids: $ids) {
-              ... on Customer {
-                id
-                displayName
-                numberOfOrders
-                orders(first: 1) {
-                  totalCount
-                }
-              }
-            }
-          }`,
-          {
-            variables: {
-              ids: queryIds,
-            },
-          }
-        );
-
-        const responseJson = await response.json();
-        console.log("[DEBUG] Raw Shopify Response:", JSON.stringify(responseJson));
-
-        if (responseJson.data?.nodes) {
-          responseJson.data.nodes.forEach((node: any) => {
-            if (node && node.id) {
-              const numericId = node.id.split("/").pop();
-              shopifyCustomersMap[numericId] = node;
-            }
-          });
-        }
-      } catch (apiError) {
-        console.error("Shopify API Error:", apiError);
-      }
-    }
-
-    const groupedData: Record<string, any> = {};
+    const uniqueCustomers = new Map();
 
     logs.forEach((log) => {
-      const { customerId, timestamp, customerTag, id, ordersCount } = log;
+      // Use customerId (which stores the Name) as the unique key
+      const key = log.customerId;
       
-      const dbNumericId = String(customerId).match(/\d+/)?.[0];
-      const freshData = dbNumericId ? shopifyCustomersMap[dbNumericId] : null;
-      
-      let displayOrdersCount = 0;
-      let displayName = customerId;
-
-      if (freshData) {
-        displayName = freshData.displayName;
-        
-        // Priority 1: numberOfOrders (Direct field replacement)
-        // Priority 2: orders.totalCount (Connection count)
-        const directCount = Number(freshData.numberOfOrders) || 0;
-        const connectionCount = freshData.orders?.totalCount || 0;
-        
-        displayOrdersCount = Math.max(directCount, connectionCount);
-      } else {
-        displayOrdersCount = ordersCount ?? 0;
+      // Since logs are sorted by date (desc), the first time we see a key, 
+      // it is the latest entry. We skip duplicates found later.
+      if (!uniqueCustomers.has(key)) {
+        uniqueCustomers.set(key, {
+          id: log.id.toString(),
+          name: log.customerId,
+          latestDate: log.timestamp,
+          customerTag: log.customerTag || "",
+          ordersCount: log.ordersCount || "0", 
+        });
       }
-
-      if (!groupedData[customerId]) {
-        groupedData[customerId] = {
-          id: id.toString(),
-          name: displayName,
-          latestDate: timestamp,
-          customerTag: customerTag || "",
-          loginCount: 0,
-          ordersCount: displayOrdersCount,
-        };
-      }
-      
-      groupedData[customerId].loginCount += 1;
     });
 
-    const tableData = Object.values(groupedData);
+    const tableData = Array.from(uniqueCustomers.values());
 
     return { tableData };
 
@@ -135,12 +60,12 @@ export default function AnalyticsPage() {
   const { tableData } = useLoaderData() as any;
 
   const resourceName = {
-    singular: 'customer',
-    plural: 'customers',
+    singular: 'log',
+    plural: 'logs',
   };
 
   const rowMarkup = tableData.map(
-    ({ id, name, latestDate, loginCount, customerTag, ordersCount }: any, index: number) => (
+    ({ id, name, latestDate, customerTag, ordersCount }: any, index: number) => (
       <IndexTable.Row
         id={id}
         key={id}
@@ -151,21 +76,13 @@ export default function AnalyticsPage() {
             {name}
           </Text>
         </IndexTable.Cell>
-        
-        <IndexTable.Cell>
-          <div style={{ whiteSpace: 'nowrap' }}>
-            <Text variant="bodyMd" as="span">
-              {new Date(latestDate).toLocaleString("en-US", {
-                month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"
-              })}
-            </Text>
-          </div>
-        </IndexTable.Cell>
 
         <IndexTable.Cell>
-          <Text variant="bodyMd" as="span">
-            {loginCount}
-          </Text>
+          {customerTag ? (
+             <Badge tone="info">{customerTag}</Badge>
+          ) : (
+            <span style={{ color: "#bfbfbf" }}>-</span>
+          )}
         </IndexTable.Cell>
 
         <IndexTable.Cell>
@@ -175,11 +92,18 @@ export default function AnalyticsPage() {
         </IndexTable.Cell>
         
         <IndexTable.Cell>
-          <Badge tone="success">Active</Badge>
-        </IndexTable.Cell>
-        
-        <IndexTable.Cell>
-          {customerTag ? <Badge>{customerTag}</Badge> : '-'}
+          <div style={{ whiteSpace: 'nowrap' }}>
+            <Text variant="bodyMd" as="span" tone="subdued">
+              {new Date(latestDate).toLocaleString("en-US", {
+                weekday: 'short',
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+              })}
+            </Text>
+          </div>
         </IndexTable.Cell>
       </IndexTable.Row>
     ),
@@ -187,35 +111,28 @@ export default function AnalyticsPage() {
 
   return (
     <AppProvider i18n={enTranslations}>
-      <Page title="Customer Login History">
-        <Layout>
-          <Layout.Section>
-            <LegacyCard>
-              {tableData.length === 0 ? (
-                  <div style={{padding: '30px', textAlign: 'center'}}>
-                      <Text as="p" tone="subdued">No data yet. Log in to your store front to see records here.</Text>
-                  </div>
-              ) : (
-                  <IndexTable
-                    resourceName={resourceName}
-                    itemCount={tableData.length}
-                    selectable={false}
-                    condensed={false}
-                    headings={[
-                        { title: 'Customer' },
-                        { title: 'Last Login' },
-                        { title: 'Total Sessions' },
-                        { title: 'Orders' },
-                        { title: 'Status' },
-                        { title: 'Tag' },
-                    ]}
-                  >
-                    {rowMarkup}
-                  </IndexTable>
-              )}
-            </LegacyCard>
-          </Layout.Section>
-        </Layout>
+      <Page title="VIP Access Logs" fullWidth>
+        <LegacyCard>
+          {tableData.length === 0 ? (
+              <div style={{padding: '50px', textAlign: 'center'}}>
+                  <Text as="p" tone="subdued" variant="bodyLg">No VIP users have logged in via the proxy yet.</Text>
+              </div>
+          ) : (
+              <IndexTable
+                resourceName={resourceName}
+                itemCount={tableData.length}
+                selectable={false}
+                headings={[
+                    { title: 'Customer' },
+                    { title: 'Tags' },
+                    { title: 'Orders' },
+                    { title: 'Time' },
+                ]}
+              >
+                {rowMarkup}
+              </IndexTable>
+          )}
+        </LegacyCard>
       </Page>
     </AppProvider>
   );
