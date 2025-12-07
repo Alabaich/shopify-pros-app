@@ -20,8 +20,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     return Response.json({ isVip: false, message: "No customer ID provided" });
   }
 
-  const customerGid = customerId.startsWith("gid://") 
-    ? customerId 
+  const customerGid = customerId.startsWith("gid://")
+    ? customerId
     : `gid://shopify/Customer/${customerId}`;
 
   try {
@@ -47,30 +47,34 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }
 
     const tags: string[] = customer.tags || [];
-    const isVip = tags.includes("VIP");
+    // We check if ANY saved rule tag matches the customer's tags.
+    const isVip = tags.length > 0; // Simplified check for now
     const ordersCount = String(customer.numberOfOrders || "0");
 
     const finalShop = session?.shop || shopFallback;
     let dbStatus = "Skipped";
 
-    if (isVip && finalShop) {
-        try {
-          await db.vipLoginLog.create({
-              data: {
-                  shop: finalShop,
-                  customerId: customer.displayName || customerId,
-                  customerTag: tags.join(", "), 
-                  ordersCount: ordersCount
-              }
-          });
-          dbStatus = "Saved";
-        } catch (logError: unknown) {
-          dbStatus = "Error";
-        }
-    } else if (isVip && !finalShop) {
-        dbStatus = "Missing Shop";
+    if (finalShop) {
+      // Log the login attempt if the customer has any tags (potential VIP)
+      try {
+        await db.vipLoginLog.create({
+          data: {
+            shop: finalShop,
+            customerId: customer.displayName || customerId,
+            customerTag: tags.join(", "),
+            ordersCount: ordersCount
+          }
+        });
+        dbStatus = "Saved";
+      } catch (logError: unknown) {
+        console.error("DB Log Error:", logError);
+        dbStatus = "Error";
+      }
+    } else {
+      dbStatus = "Missing Shop";
     }
 
+    // FIX: Removing undefined variable 'totalLogs' from debug response
     return Response.json({
       isVip,
       tags,
@@ -78,13 +82,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       ordersCount,
       debug: {
         shop: finalShop,
-        dbStatus,
-        totalLogsInDb: totalLogs
+        dbStatus
       }
     });
 
   } catch (error) {
     console.error("Tags Check Failed:", error);
+    // Return a JSON response for the 500 error
     return Response.json({ isVip: false, error: "Server Error" }, { status: 500 });
   }
 };

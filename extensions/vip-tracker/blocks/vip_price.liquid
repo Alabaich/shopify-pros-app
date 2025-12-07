@@ -1,0 +1,163 @@
+{% assign final_discount = 0 %}
+{% assign show_widget = false %}
+
+{% if customer %}
+  {% assign tier_1_tag = block.settings.tier_1_tag %}
+  {% assign tier_1_disc = block.settings.tier_1_discount | plus: 0 %}
+  
+  {% assign tier_2_tag = block.settings.tier_2_tag %}
+  {% assign tier_2_disc = block.settings.tier_2_discount | plus: 0 %}
+  
+  {% assign tier_3_tag = block.settings.tier_3_tag %}
+  {% assign tier_3_disc = block.settings.tier_3_discount | plus: 0 %}
+
+  {% if tier_1_tag != blank and customer.tags contains tier_1_tag %}
+    {% assign final_discount = tier_1_disc %}
+    {% assign show_widget = true %}
+  {% elsif tier_2_tag != blank and customer.tags contains tier_2_tag %}
+    {% assign final_discount = tier_2_disc %}
+    {% assign show_widget = true %}
+  {% elsif tier_3_tag != blank and customer.tags contains tier_3_tag %}
+    {% assign final_discount = tier_3_disc %}
+    {% assign show_widget = true %}
+  {% endif %}
+{% endif %}
+
+{% if show_widget %}
+  {% assign original_price = product.price %}
+  {% assign discount_amount = original_price | times: final_discount | divided_by: 100 %}
+  {% assign final_price = original_price | minus: discount_amount %}
+
+  <div class="vip-price-widget" style="margin: {{ block.settings.margin_top }}px 0 {{ block.settings.margin_bottom }}px;">
+    <p class="vip-label" style="color: {{ block.settings.text_color }}; margin-bottom: 5px; font-weight: bold;">
+      {{ block.settings.label_text }}
+    </p>
+    <div style="display: flex; align-items: baseline; gap: 10px;">
+      <span class="vip-final-price" style="font-size: 1.5em; font-weight: bold; color: {{ block.settings.price_color }};">
+        {{ final_price | money }}
+      </span>
+      {% if block.settings.show_original %}
+        <s class="vip-original-price" style="color: #888; font-size: 0.9em;">
+          {{ original_price | money }}
+        </s>
+      {% endif %}
+    </div>
+  </div>
+{% endif %}
+
+{% schema %}
+{
+  "name": "VIP Price Label",
+  "target": "section",
+  "settings": [
+    {
+      "type": "header",
+      "content": "Tier 1 (Highest Priority)"
+    },
+    {
+      "type": "text",
+      "id": "tier_1_tag",
+      "label": "Customer Tag",
+      "default": "Gold"
+    },
+    {
+      "type": "range",
+      "id": "tier_1_discount",
+      "min": 1,
+      "max": 99,
+      "step": 1,
+      "unit": "%",
+      "label": "Discount",
+      "default": 30
+    },
+    {
+      "type": "header",
+      "content": "Tier 2"
+    },
+    {
+      "type": "text",
+      "id": "tier_2_tag",
+      "label": "Customer Tag",
+      "default": "Silver"
+    },
+    {
+      "type": "range",
+      "id": "tier_2_discount",
+      "min": 1,
+      "max": 99,
+      "step": 1,
+      "unit": "%",
+      "label": "Discount",
+      "default": 20
+    },
+    {
+      "type": "header",
+      "content": "Tier 3"
+    },
+    {
+      "type": "text",
+      "id": "tier_3_tag",
+      "label": "Customer Tag",
+      "default": "Bronze"
+    },
+    {
+      "type": "range",
+      "id": "tier_3_discount",
+      "min": 1,
+      "max": 99,
+      "step": 1,
+      "unit": "%",
+      "label": "Discount",
+      "default": 10
+    },
+    {
+      "type": "header",
+      "content": "Appearance"
+    },
+    {
+      "type": "text",
+      "id": "label_text",
+      "label": "Label Text",
+      "default": "Your Exclusive Price:"
+    },
+    {
+      "type": "color",
+      "id": "text_color",
+      "label": "Label Color",
+      "default": "#000000"
+    },
+    {
+      "type": "color",
+      "id": "price_color",
+      "label": "Price Color",
+      "default": "#ff0000"
+    },
+    {
+      "type": "checkbox",
+      "id": "show_original",
+      "label": "Show Original Price",
+      "default": true
+    },
+    {
+      "type": "range",
+      "id": "margin_top",
+      "min": 0,
+      "max": 100,
+      "step": 4,
+      "unit": "px",
+      "label": "Margin Top",
+      "default": 12
+    },
+    {
+      "type": "range",
+      "id": "margin_bottom",
+      "min": 0,
+      "max": 100,
+      "step": 4,
+      "unit": "px",
+      "label": "Margin Bottom",
+      "default": 12
+    }
+  ]
+}
+{% endschema %}
