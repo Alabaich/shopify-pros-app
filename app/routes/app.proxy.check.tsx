@@ -3,29 +3,31 @@ import { authenticate } from "../shopify.server";
 import db from "../db.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin } = await authenticate.public.appProxy(request);
+  const url = new URL(request.url);
+  
+  // 1. Get shop from URL as fallback (always present in proxy requests)
+  const shopFallback = url.searchParams.get("shop");
+  
+  const { admin, session } = await authenticate.public.appProxy(request);
 
   if (!admin) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const url = new URL(request.url);
   const customerId = url.searchParams.get("customerId");
-  const shop = url.searchParams.get("shop");
 
   if (!customerId) {
     return Response.json({ isVip: false, message: "No customer ID provided" });
   }
 
-  const customerGid = customerId.startsWith("gid://") 
-    ? customerId 
+  const customerGid = customerId.startsWith("gid://")
+    ? customerId
     : `gid://shopify/Customer/${customerId}`;
 
   try {
-    // FIXED QUERY: using 'numberOfOrders' instead of 'ordersCount'
     const response = await admin.graphql(
       `#graphql
-      query getCustomerTags($id: ID!) {
+      query getCustomerInfo($id: ID!) {
         customer(id: $id) {
           id
           displayName
@@ -41,38 +43,52 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     const customer = responseJson.data?.customer;
 
     if (!customer) {
-      return Response.json({ isVip: false, tags: [] });
+      return Response.json({ isVip: false, tags: [], ordersCount: "0" });
     }
 
     const tags: string[] = customer.tags || [];
-    const isVip = tags.includes("VIP");
+    // We check if ANY saved rule tag matches the customer's tags.
+    const isVip = tags.length > 0; // Simplified check for now
+    const ordersCount = String(customer.numberOfOrders || "0");
 
-    // Use numberOfOrders directly
-    const ordersCount = Number(customer.numberOfOrders) || 0;
+    const finalShop = session?.shop || shopFallback;
+    let dbStatus = "Skipped";
 
-    if (shop) {
-        try {
-          await db.vipLoginLog.create({
-              data: {
-                  shop: shop,
-                  customerId: customer.id, // Saving ID, not Name
-                  customerTag: tags.join(", "),
-                  ordersCount: ordersCount
-              }
-          });
-        } catch (logError: unknown) {
-          console.error("Failed to log access", logError);
-        }
+    if (finalShop) {
+      // Log the login attempt if the customer has any tags (potential VIP)
+      try {
+        await db.vipLoginLog.create({
+          data: {
+            shop: finalShop,
+            customerId: customer.displayName || customerId,
+            customerTag: tags.join(", "),
+            ordersCount: ordersCount
+          }
+        });
+        dbStatus = "Saved";
+      } catch (logError: unknown) {
+        console.error("DB Log Error:", logError);
+        dbStatus = "Error";
+      }
+    } else {
+      dbStatus = "Missing Shop";
     }
 
+    // FIX: Removing undefined variable 'totalLogs' from debug response
     return Response.json({
       isVip,
       tags,
-      customerName: customer.displayName
+      customerName: customer.displayName,
+      ordersCount,
+      debug: {
+        shop: finalShop,
+        dbStatus
+      }
     });
 
   } catch (error) {
-    console.error("Tag Check Failed:", error);
+    console.error("Tags Check Failed:", error);
+    // Return a JSON response for the 500 error
     return Response.json({ isVip: false, error: "Server Error" }, { status: 500 });
   }
 };

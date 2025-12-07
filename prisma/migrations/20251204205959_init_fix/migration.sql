@@ -23,6 +23,6 @@ CREATE TABLE "VipLoginLog" (
     "shop" TEXT NOT NULL,
     "customerId" TEXT NOT NULL,
     "customerTag" TEXT,
-    "ordersCount" INTEGER,
+    "ordersCount" TEXT,
     "timestamp" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
