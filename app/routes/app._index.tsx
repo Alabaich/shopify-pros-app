@@ -1,254 +1,177 @@
-import { useEffect } from "react";
-import type {
-  ActionFunctionArgs,
-  HeadersFunction,
-  LoaderFunctionArgs,
-} from "react-router";
-import { useFetcher } from "react-router";
-import { useAppBridge } from "@shopify/app-bridge-react";
+import { useState, useEffect } from "react";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import { Form, useActionData, useNavigation } from "react-router";
 import { authenticate } from "../shopify.server";
-import { boundary } from "@shopify/shopify-app-react-router/server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
-
   return null;
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin } = await authenticate.admin(request);
-  const color = ["Red", "Orange", "Yellow", "Green"][
-    Math.floor(Math.random() * 4)
-  ];
-  const response = await admin.graphql(
-    `#graphql
-      mutation populateProduct($product: ProductCreateInput!) {
-        productCreate(product: $product) {
-          product {
-            id
-            title
-            handle
-            status
-            variants(first: 10) {
-              edges {
-                node {
-                  id
-                  price
-                  barcode
-                  createdAt
-                }
-              }
-            }
-          }
-        }
-      }`,
-    {
-      variables: {
-        product: {
-          title: `${color} Snowboard`,
-        },
-      },
-    },
-  );
-  const responseJson = await response.json();
+  const formData = await request.formData();
 
-  const product = responseJson.data!.productCreate!.product!;
-  const variantId = product.variants.edges[0]!.node!.id!;
+  const tagToTarget = String(formData.get("tag"));
+  const discountTitle = String(formData.get("title"));
+  const percentageRaw = parseFloat(String(formData.get("percentage") || "0"));
+  const percentageValue = percentageRaw / 100;
 
-  const variantResponse = await admin.graphql(
+  if (!tagToTarget) {
+    return { status: "fail", error: "Missing Tag" };
+  }
+
+  const segmentQuery = `customer_tags CONTAINS '${tagToTarget}'`;
+
+  const segmentResponse = await admin.graphql(
     `#graphql
-    mutation shopifyReactRouterTemplateUpdateVariant($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-      productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-        productVariants {
+    mutation CreateSegment($name: String!, $query: String!) {
+      segmentCreate(name: $name, query: $query) {
+        segment {
           id
-          price
-          barcode
-          createdAt
+          name
+        }
+        userErrors {
+          field
+          message
         }
       }
     }`,
     {
       variables: {
-        productId: product.id,
-        variants: [{ id: variantId, price: "100.00" }],
-      },
-    },
+        name: `${tagToTarget} Users`,
+        query: segmentQuery
+      }
+    }
   );
 
-  const variantResponseJson = await variantResponse.json();
+  const segmentJson = await segmentResponse.json();
+  const segmentErrors = segmentJson.data.segmentCreate.userErrors;
+
+  if (segmentErrors.length > 0) {
+    return { status: "fail", error: `Segment Error: ${segmentErrors[0].message}` };
+  }
+
+  const newSegmentId = segmentJson.data.segmentCreate.segment.id;
+
+  const discountResponse = await admin.graphql(
+    `#graphql
+    mutation CreateNativeDiscount($discount: DiscountAutomaticBasicInput!) {
+      discountAutomaticBasicCreate(automaticBasicDiscount: $discount) {
+        automaticDiscountNode {
+          id
+          automaticDiscount {
+            ... on DiscountAutomaticBasic {
+              title
+              status
+            }
+          }
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }`,
+    {
+      variables: {
+        discount: {
+          title: discountTitle,
+          startsAt: new Date().toISOString(),
+          context: {
+            customerSegments: {
+              add: [newSegmentId]
+            }
+          },
+          customerGets: {
+            value: {
+              percentage: percentageValue
+            },
+            items: {
+              all: true
+            }
+          }
+        }
+      }
+    }
+  );
+
+  const discountJson = await discountResponse.json();
+  const discountErrors = discountJson.data.discountAutomaticBasicCreate.userErrors;
+
+  if (discountErrors.length > 0) {
+    return { status: "fail", error: `Discount Error: ${discountErrors[0].message}` };
+  }
 
   return {
-    product: responseJson!.data!.productCreate!.product,
-    variant:
-      variantResponseJson!.data!.productVariantsBulkUpdate!.productVariants,
+    status: "success",
+    segmentName: segmentJson.data.segmentCreate.segment.name,
+    discountTitle: discountJson.data.discountAutomaticBasicCreate.automaticDiscountNode.automaticDiscount.title
   };
 };
 
 export default function Index() {
-  const fetcher = useFetcher<typeof action>();
+  const actionData = useActionData<typeof action>();
+  const nav = useNavigation();
+  const isLoading = nav.state === "submitting";
 
-  const shopify = useAppBridge();
-  const isLoading =
-    ["loading", "submitting"].includes(fetcher.state) &&
-    fetcher.formMethod === "POST";
+  const [tag, setTag] = useState("VIP");
+  const [percentage, setPercentage] = useState("10");
 
   useEffect(() => {
-    if (fetcher.data?.product?.id) {
-      shopify.toast.show("Product created");
+    if (actionData?.status === "success") {
+      shopify.toast.show(`Created ${actionData.discountTitle}`);
+    } else if (actionData?.status === "fail") {
+      shopify.toast.show(actionData.error, { isError: true });
     }
-  }, [fetcher.data?.product?.id, shopify]);
-
-  const generateProduct = () => fetcher.submit({}, { method: "POST" });
+  }, [actionData]);
 
   return (
-    <s-page heading="Shopify app template">
-      <s-button slot="primary-action" onClick={generateProduct}>
-        Generate a product
-      </s-button>
+    <s-page title="Automatic Discount Generator">
+      {actionData?.status === "success" && (
+        <s-banner tone="success" title="Success">
+          Discount created successfully! You can verify it in the <a href="shopify:admin/discounts" target="_blank">Discounts</a> section.
+        </s-banner>
+      )}
 
-      <s-section heading="Congrats on creating a new Shopify app 🎉">
-        <s-paragraph>
-          This embedded app template uses{" "}
-          <s-link
-            href="https://shopify.dev/docs/apps/tools/app-bridge"
-            target="_blank"
-          >
-            App Bridge
-          </s-link>{" "}
-          interface examples like an{" "}
-          <s-link href="/app/additional">additional page in the app nav</s-link>
-          , as well as an{" "}
-          <s-link
-            href="https://shopify.dev/docs/api/admin-graphql"
-            target="_blank"
-          >
-            Admin GraphQL
-          </s-link>{" "}
-          mutation demo, to provide a starting point for app development.
-        </s-paragraph>
-      </s-section>
-      <s-section heading="Get started with products">
-        <s-paragraph>
-          Generate a product with GraphQL and get the JSON output for that
-          product. Learn more about the{" "}
-          <s-link
-            href="https://shopify.dev/docs/api/admin-graphql/latest/mutations/productCreate"
-            target="_blank"
-          >
-            productCreate
-          </s-link>{" "}
-          mutation in our API references.
-        </s-paragraph>
-        <s-stack direction="inline" gap="base">
-          <s-button
-            onClick={generateProduct}
-            {...(isLoading ? { loading: true } : {})}
-          >
-            Generate a product
-          </s-button>
-          {fetcher.data?.product && (
-            <s-button
-              onClick={() => {
-                shopify.intents.invoke?.("edit:shopify/Product", {
-                  value: fetcher.data?.product?.id,
-                });
-              }}
-              target="_blank"
-              variant="tertiary"
-            >
-              Edit product
-            </s-button>
-          )}
-        </s-stack>
-        {fetcher.data?.product && (
-          <s-section heading="productCreate mutation">
-            <s-stack direction="block" gap="base">
-              <s-box
-                padding="base"
-                borderWidth="base"
-                borderRadius="base"
-                background="subdued"
-              >
-                <pre style={{ margin: 0 }}>
-                  <code>{JSON.stringify(fetcher.data.product, null, 2)}</code>
-                </pre>
-              </s-box>
+      <s-section>
+        <s-stack gap="500">
+          <p>Create a native Shopify discount for your Proxy login users.</p>
 
-              <s-heading>productVariantsBulkUpdate mutation</s-heading>
-              <s-box
-                padding="base"
-                borderWidth="base"
-                borderRadius="base"
-                background="subdued"
+          <Form method="post">
+            <s-stack gap="400">
+              <s-text-field
+                label="Customer Tag"
+                name="tag"
+                value={tag}
+                onInput={(e: any) => setTag(e.target.value)}
+              />
+
+              <s-text-field
+                label="Discount Percentage"
+                type="number"
+                name="percentage"
+                value={percentage}
+                onInput={(e: any) => setPercentage(e.target.value)}
+              />
+
+              <input
+                type="hidden"
+                name="title"
+                value={`${tag} Automatic ${percentage}% Off`}
+              />
+
+              <s-button
+                type="submit"
+                variant="primary"
+                loading={isLoading ? "true" : undefined}
               >
-                <pre style={{ margin: 0 }}>
-                  <code>{JSON.stringify(fetcher.data.variant, null, 2)}</code>
-                </pre>
-              </s-box>
+                Create Native Discount
+              </s-button>
             </s-stack>
-          </s-section>
-        )}
-      </s-section>
-
-      <s-section slot="aside" heading="App template specs">
-        <s-paragraph>
-          <s-text>Framework: </s-text>
-          <s-link href="https://reactrouter.com/" target="_blank">
-            React Router
-          </s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>Interface: </s-text>
-          <s-link
-            href="https://shopify.dev/docs/api/app-home/using-polaris-components"
-            target="_blank"
-          >
-            Polaris web components
-          </s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>API: </s-text>
-          <s-link
-            href="https://shopify.dev/docs/api/admin-graphql"
-            target="_blank"
-          >
-            GraphQL
-          </s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>Database: </s-text>
-          <s-link href="https://www.prisma.io/" target="_blank">
-            Prisma
-          </s-link>
-        </s-paragraph>
-      </s-section>
-
-      <s-section slot="aside" heading="Next steps">
-        <s-unordered-list>
-          <s-list-item>
-            Build an{" "}
-            <s-link
-              href="https://shopify.dev/docs/apps/getting-started/build-app-example"
-              target="_blank"
-            >
-              example app
-            </s-link>
-          </s-list-item>
-          <s-list-item>
-            Explore Shopify&apos;s API with{" "}
-            <s-link
-              href="https://shopify.dev/docs/apps/tools/graphiql-admin-api"
-              target="_blank"
-            >
-              GraphiQL
-            </s-link>
-          </s-list-item>
-        </s-unordered-list>
+          </Form>
+        </s-stack>
       </s-section>
     </s-page>
   );
 }
-
-export const headers: HeadersFunction = (headersArgs) => {
-  return boundary.headers(headersArgs);
-};
