@@ -27,7 +27,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   try {
     const response = await admin.graphql(
       `#graphql
-      query getCustomerInfo($id: ID!) {
+      query getCustomerAndRules($id: ID!) {
         customer(id: $id) {
           id
           displayName
@@ -35,33 +35,43 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           tags
           numberOfOrders
         }
+        shop {
+          metafield(namespace: "vip_pricing", key: "rules") {
+            value
+          }
+        }
       }`,
       { variables: { id: customerGid } }
     );
 
     const responseJson = await response.json();
     const customer = responseJson.data?.customer;
+    const rulesMetafield = responseJson.data?.shop?.metafield?.value;
 
     if (!customer) {
       return Response.json({ isVip: false, tags: [], ordersCount: "0" });
     }
 
     const tags: string[] = customer.tags || [];
-    // We check if ANY saved rule tag matches the customer's tags.
-    const isVip = tags.length > 0; // Simplified check for now
+    
+    const rules = rulesMetafield ? JSON.parse(rulesMetafield) : [];
+    const allowedTags = rules.map((r: any) => r.tag);
+
+    const matchingTags = tags.filter(tag => allowedTags.includes(tag));
+    const isVip = matchingTags.length > 0;
+    
     const ordersCount = String(customer.numberOfOrders || "0");
 
     const finalShop = session?.shop || shopFallback;
     let dbStatus = "Skipped";
 
-    if (finalShop) {
-      // Log the login attempt if the customer has any tags (potential VIP)
+    if (finalShop && isVip) {
       try {
         await db.vipLoginLog.create({
           data: {
             shop: finalShop,
             customerId: customer.displayName || customerId,
-            customerTag: tags.join(", "),
+            customerTag: matchingTags.join(", "),
             ordersCount: ordersCount
           }
         });
@@ -71,10 +81,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         dbStatus = "Error";
       }
     } else {
-      dbStatus = "Missing Shop";
+      dbStatus = isVip ? "Missing Shop" : "Not VIP";
     }
 
-    // FIX: Removing undefined variable 'totalLogs' from debug response
     return Response.json({
       isVip,
       tags,
@@ -88,7 +97,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   } catch (error) {
     console.error("Tags Check Failed:", error);
-    // Return a JSON response for the 500 error
     return Response.json({ isVip: false, error: "Server Error" }, { status: 500 });
   }
 };

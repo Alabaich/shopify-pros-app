@@ -1,44 +1,91 @@
 {% assign final_discount = 0 %}
 {% assign show_widget = false %}
+{% assign vip_rules = shop.metafields.vip_pricing.rules.value %}
 
-{% if customer %}
-  {% assign tier_1_tag = block.settings.tier_1_tag %}
-  {% assign tier_1_disc = block.settings.tier_1_discount | plus: 0 %}
-  
-  {% assign tier_2_tag = block.settings.tier_2_tag %}
-  {% assign tier_2_disc = block.settings.tier_2_discount | plus: 0 %}
-  
-  {% assign tier_3_tag = block.settings.tier_3_tag %}
-  {% assign tier_3_disc = block.settings.tier_3_discount | plus: 0 %}
-
-  {% if tier_1_tag != blank and customer.tags contains tier_1_tag %}
-    {% assign final_discount = tier_1_disc %}
-    {% assign show_widget = true %}
-  {% elsif tier_2_tag != blank and customer.tags contains tier_2_tag %}
-    {% assign final_discount = tier_2_disc %}
-    {% assign show_widget = true %}
-  {% elsif tier_3_tag != blank and customer.tags contains tier_3_tag %}
-    {% assign final_discount = tier_3_disc %}
-    {% assign show_widget = true %}
-  {% endif %}
+{% if customer and vip_rules != blank %}
+  {% for rule in vip_rules %}
+    {% if customer.tags contains rule.tag %}
+      {% assign rule_percentage = rule.percentage | plus: 0 %}
+      {% if rule_percentage > final_discount %}
+        {% assign final_discount = rule_percentage %}
+        {% assign show_widget = true %}
+      {% endif %}
+    {% endif %}
+  {% endfor %}
 {% endif %}
 
 {% if show_widget %}
-  {% assign original_price = product.price %}
+  {% assign current_variant = product.selected_or_first_available_variant %}
+  {% assign original_price = current_variant.price %}
+  
   {% assign discount_amount = original_price | times: final_discount | divided_by: 100 %}
   {% assign final_price = original_price | minus: discount_amount %}
 
-  <div class="vip-price-widget" style="margin: {{ block.settings.margin_top }}px 0 {{ block.settings.margin_bottom }}px;">
-    <p class="vip-label" style="color: {{ block.settings.text_color }}; margin-bottom: 5px; font-weight: bold;">
-      {{ block.settings.label_text }}
-    </p>
-    <div style="display: flex; align-items: baseline; gap: 10px;">
-      <span class="vip-final-price" style="font-size: 1.5em; font-weight: bold; color: {{ block.settings.price_color }};">
+  {% assign compare_price = original_price %}
+  {% if current_variant.compare_at_price > original_price %}
+    {% assign compare_price = current_variant.compare_at_price %}
+  {% endif %}
+
+  <div class="vip-price-widget" style="
+      background: linear-gradient(135deg, {{ block.settings.vip_bg_color }}, {{ block.settings.vip_bg_color | color_lighten: 10 }});
+      border: 1px solid {{ block.settings.border_color }};
+      border-radius: 12px;
+      padding: 20px 24px;
+      margin: {{ block.settings.margin_top }}px 0 {{ block.settings.margin_bottom }}px;
+      box-shadow: 0 8px 20px rgba(0,0,0,0.12);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: flex-start;
+      position: relative;
+      overflow: hidden;
+  ">
+    <!-- Decorative faint shine effect covering the whole block -->
+    <div style="
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: radial-gradient(circle at center, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0) 70%);
+        pointer-events: none;
+    "></div>
+
+    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px; position: relative; z-index: 2;">
+
+    <svg width="22px" height="22px" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" stroke="#000000"><g id="SVGRepo_bgCarrier" stroke-width="0"></g><g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"></g><g id="SVGRepo_iconCarrier"> <path d="M4 8L6 20H18L20 8M4 8L5.71624 9.37299C6.83218 10.2657 7.39014 10.7121 7.95256 10.7814C8.4453 10.8421 8.94299 10.7173 9.34885 10.4314C9.81211 10.1051 10.0936 9.4483 10.6565 8.13476L12 5M4 8C4.55228 8 5 7.55228 5 7C5 6.44772 4.55228 6 4 6C3.44772 6 3 6.44772 3 7C3 7.55228 3.44772 8 4 8ZM20 8L18.2838 9.373C17.1678 10.2657 16.6099 10.7121 16.0474 10.7814C15.5547 10.8421 15.057 10.7173 14.6511 10.4314C14.1879 10.1051 13.9064 9.4483 13.3435 8.13476L12 5M20 8C20.5523 8 21 7.55228 21 7C21 6.44772 20.5523 6 20 6C19.4477 6 19 6.44772 19 7C19 7.55228 19.4477 8 20 8ZM12 5C12.5523 5 13 4.55228 13 4C13 3.44772 12.5523 3 12 3C11.4477 3 11 3.44772 11 4C11 4.55228 11.4477 5 12 5ZM12 4H12.01M20 7H20.01M4 7H4.01" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path> </g></svg>
+      <p class="vip-label" style="
+          color: {{ block.settings.vip_text_color }};
+          margin: 0;
+          font-size: 0.85em;
+          opacity: 0.95;
+          font-weight: 700;
+          letter-spacing: 1px;
+          text-transform: uppercase;
+      ">
+        {{ block.settings.label_text }}
+      </p>
+    </div>
+    
+    <div style="display: flex; align-items: baseline; gap: 12px; position: relative; z-index: 2; width: 100%; justify-content: end;">
+      <span class="vip-final-price" style="
+          font-size: 2em;
+          font-weight: 800;
+          color: {{ block.settings.vip_price_color }};
+          line-height: 1;
+          text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      ">
         {{ final_price | money }}
       </span>
+      
       {% if block.settings.show_original %}
-        <s class="vip-original-price" style="color: #888; font-size: 0.9em;">
-          {{ original_price | money }}
+        <s class="vip-original-price" style="
+            color: {{ block.settings.vip_text_color }};
+            opacity: 0.6;
+            font-size: 1.1em;
+            text-decoration-thickness: 1.5px;
+        ">
+          {{ compare_price | money }}
         </s>
       {% endif %}
     </div>
@@ -52,85 +99,37 @@
   "settings": [
     {
       "type": "header",
-      "content": "Tier 1 (Highest Priority)"
-    },
-    {
-      "type": "text",
-      "id": "tier_1_tag",
-      "label": "Customer Tag",
-      "default": "Gold"
-    },
-    {
-      "type": "range",
-      "id": "tier_1_discount",
-      "min": 1,
-      "max": 99,
-      "step": 1,
-      "unit": "%",
-      "label": "Discount",
-      "default": 30
-    },
-    {
-      "type": "header",
-      "content": "Tier 2"
-    },
-    {
-      "type": "text",
-      "id": "tier_2_tag",
-      "label": "Customer Tag",
-      "default": "Silver"
-    },
-    {
-      "type": "range",
-      "id": "tier_2_discount",
-      "min": 1,
-      "max": 99,
-      "step": 1,
-      "unit": "%",
-      "label": "Discount",
-      "default": 20
-    },
-    {
-      "type": "header",
-      "content": "Tier 3"
-    },
-    {
-      "type": "text",
-      "id": "tier_3_tag",
-      "label": "Customer Tag",
-      "default": "Bronze"
-    },
-    {
-      "type": "range",
-      "id": "tier_3_discount",
-      "min": 1,
-      "max": 99,
-      "step": 1,
-      "unit": "%",
-      "label": "Discount",
-      "default": 10
-    },
-    {
-      "type": "header",
       "content": "Appearance"
     },
     {
       "type": "text",
       "id": "label_text",
       "label": "Label Text",
-      "default": "Your Exclusive Price:"
+      "default": "VIP Exclusive Price"
     },
     {
       "type": "color",
-      "id": "text_color",
-      "label": "Label Color",
-      "default": "#000000"
+      "id": "vip_bg_color",
+      "label": "Background Color",
+      "default": "#1a1a1a"
     },
     {
       "type": "color",
-      "id": "price_color",
+      "id": "border_color",
+      "label": "Border/Accent Color",
+      "default": "#D4AF37"
+    },
+    {
+      "type": "color",
+      "id": "vip_text_color",
+      "label": "Text Color",
+      "default": "#ffffff"
+    },
+    {
+      "type": "color",
+      "id": "vip_price_color",
       "label": "Price Color",
-      "default": "#ff0000"
+      "default": "#ffffff"
     },
     {
       "type": "checkbox",
